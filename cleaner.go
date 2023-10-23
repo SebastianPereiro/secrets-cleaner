@@ -19,9 +19,9 @@ var (
 	project string
 	dryrun  bool
 	debug   bool
-	// Coralogix private key, app and subsystem name
-	coralogix_private_key    string = os.Getenv("CORALOGIX_PRIVATE_KEY")
+	// Coralogix creds
 	coralogix_app_name       string = os.Getenv("CORALOGIX_APP_NAME")
+	coralogix_key_gsm_name   string = os.Getenv("CORALOGIX_KEY_GSM_NAME")
 	coralogix_subsystem_name        = "secrets-cleaner"
 )
 
@@ -211,33 +211,13 @@ func main() {
 		customHelp()
 		os.Exit(1)
 	}
-	// Configure the default logrus (global) logger
+	// Debug
 	if debug {
 		logrus.SetLevel(logrus.DebugLevel)
-	}
-	// Coralogix docs:
-	// https://coralogix.com/docs/go/
-	// https://pkg.go.dev/github.com/coralogix/go-coralogix-sdk?utm_source=godoc#section-readme
-	if coralogix_private_key != "" && coralogix_app_name != "" {
-		if debug {
-			coralogix.SetDebug(true)
-		}
-		CoralogixHook := coralogix.NewCoralogixHook(
-			coralogix_private_key,
-			coralogix_app_name,
-			coralogix_subsystem_name,
-		)
-		logrus.AddHook(CoralogixHook)
-		defer CoralogixHook.Close()
+		coralogix.SetDebug(true)
 	}
 
 	// The main context
-	logrus.WithFields(logrus.Fields{
-		"timestamp":     time.Now(),
-		"unixtimestamp": time.Now().UnixNano(),
-		"project":       project,
-	}).Info("Starting the secrets cleaner for ", project, " project")
-
 	ctx := context.Background()
 	c, err := secretmanager.NewClient(ctx)
 	if err != nil {
@@ -249,6 +229,40 @@ func main() {
 	}
 	defer c.Close()
 
+	// Get Coralogix credentials from the secret name obtained from ENV
+	// Access the secret from Secret Manager.
+	accessRequest := &secretmanagerpb.AccessSecretVersionRequest{
+		Name: coralogix_key_gsm_name + "/versions/latest",
+	}
+
+	coralogix_private_key, err := c.AccessSecretVersion(ctx, accessRequest)
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"timestamp":     time.Now(),
+			"unixtimestamp": time.Now().UnixNano(),
+			"project":       project,
+		}).Fatalf("Failed to access secret version: %v", err)
+	}
+
+	// Initialise logging to Coralogix
+	// Coralogix docs:
+	// https://coralogix.com/docs/go/
+	// https://pkg.go.dev/github.com/coralogix/go-coralogix-sdk?utm_source=godoc#section-readme
+	CoralogixHook := coralogix.NewCoralogixHook(
+		string(coralogix_private_key.Payload.Data),
+		coralogix_app_name,
+		coralogix_subsystem_name,
+	)
+	logrus.AddHook(CoralogixHook)
+	defer CoralogixHook.Close()
+
+	logrus.WithFields(logrus.Fields{
+		"timestamp":     time.Now(),
+		"unixtimestamp": time.Now().UnixNano(),
+		"project":       project,
+	}).Info("Starting the secrets cleaner for ", project, " project")
+
+	// Get all project secrets
 	secrets, err := listSecrets(ctx, c, "projects/"+project)
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
