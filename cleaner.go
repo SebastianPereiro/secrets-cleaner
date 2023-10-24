@@ -4,19 +4,25 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
+	"time"
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	"github.com/coralogix/go-coralogix-sdk"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/api/iterator"
 )
 
-// Command line flags
 var (
+	// Command line flags
 	project string
 	dryrun  bool
 	debug   bool
+	// Coralogix creds
+	coralogix_app_name       string = os.Getenv("CORALOGIX_APP_NAME")
+	coralogix_key_gsm_name   string = os.Getenv("CORALOGIX_KEY_GSM_NAME")
+	coralogix_subsystem_name        = "secrets-cleaner"
 )
 
 func init() {
@@ -48,7 +54,11 @@ func listSecrets(ctx context.Context, c *secretmanager.Client, projectName strin
 			break
 		}
 		if err != nil {
-			log.Fatalf("Failed to get the list of secrets: %v", err)
+			logrus.WithFields(logrus.Fields{
+				"timestamp":     time.Now(),
+				"unixtimestamp": time.Now().UnixNano(),
+				"project":       project,
+			}).Fatalf("Failed to get the list of secrets: %v", err)
 		}
 		secrets = append(secrets, SecretName{Name: resp.Name})
 	}
@@ -70,14 +80,19 @@ func disableExceptThelatestVersions(ctx context.Context, c *secretmanager.Client
 			break
 		}
 		if err != nil {
-			log.Fatalf("Failed to get secret versions: %v", err)
+			logrus.WithFields(logrus.Fields{
+				"timestamp":     time.Now(),
+				"unixtimestamp": time.Now().UnixNano(),
+				"project":       project,
+			}).Fatalf("Failed to get secret versions: %v", err)
 		}
 		versions = append(versions, SecretVersion{Name: resp.Name, CreateTimeSeconds: resp.CreateTime.Seconds, CreateTimeNanos: resp.CreateTime.Nanos})
 	}
-	if debug {
-		fmt.Println("Versions found:")
-		fmt.Println(versions)
-	}
+	logrus.WithFields(logrus.Fields{
+		"timestamp":     time.Now(),
+		"unixtimestamp": time.Now().UnixNano(),
+		"project":       project,
+	}).Debug(secretName, " versions found: ", versions)
 	// find the latest version by comparing the creation timestamp (unix seconds + nanoseconds)
 	var latestVerName string
 	highestTimestamp := int64(0)
@@ -104,16 +119,30 @@ func disableExceptThelatestVersions(ctx context.Context, c *secretmanager.Client
 				Name: version.Name,
 			}
 			if dryrun {
-				fmt.Println("Secret to disable and destroy: ", version.Name)
+				logrus.WithFields(logrus.Fields{
+					"timestamp":     time.Now(),
+					"unixtimestamp": time.Now().UnixNano(),
+					"project":       project,
+				}).Info("Secret to disable and destroy: ", version.Name)
 			} else {
 				resp, err := c.DisableSecretVersion(ctx, req)
 				if err != nil {
-					log.Fatalf("Failed to disable secret version: %v", err)
+					logrus.WithFields(logrus.Fields{
+						"timestamp":     time.Now(),
+						"unixtimestamp": time.Now().UnixNano(),
+						"project":       project,
+					}).Fatalf("Failed to disable secret version: %v", err)
 				}
-				fmt.Println("Disabled secret version: ", version.Name)
-				if debug {
-					fmt.Println("Operation responce", resp)
-				}
+				logrus.WithFields(logrus.Fields{
+					"timestamp":     time.Now(),
+					"unixtimestamp": time.Now().UnixNano(),
+					"project":       project,
+				}).Info("Disabling the secret version: ", version.Name)
+				logrus.WithFields(logrus.Fields{
+					"timestamp":     time.Now(),
+					"unixtimestamp": time.Now().UnixNano(),
+					"project":       project,
+				}).Debug("Operation responce", resp)
 			}
 		}
 	}
@@ -133,22 +162,36 @@ func destroyDisabledVersions(ctx context.Context, c *secretmanager.Client, secre
 			break
 		}
 		if err != nil {
-			log.Fatalf("Failed to get secret versions: %v", err)
+			logrus.WithFields(logrus.Fields{
+				"timestamp":     time.Now(),
+				"unixtimestamp": time.Now().UnixNano(),
+				"project":       project,
+			}).Fatalf("Failed to get secret versions: %v", err)
 		}
 		if dryrun {
-			fmt.Println("Secret to destroy: ", resp.Name)
+			logrus.WithFields(logrus.Fields{
+				"timestamp":     time.Now(),
+				"unixtimestamp": time.Now().UnixNano(),
+				"project":       project,
+			}).Info("Secret to destroy: ", resp.Name)
 		} else {
 			destroyReq := &secretmanagerpb.DestroySecretVersionRequest{
 				Name: resp.Name,
 			}
 			destroyResp, err := c.DestroySecretVersion(ctx, destroyReq)
 			if err != nil {
-				log.Fatalf("Failed to destroy secret version: %v", err)
+				logrus.WithFields(logrus.Fields{
+					"timestamp":     time.Now(),
+					"unixtimestamp": time.Now().UnixNano(),
+					"project":       project,
+				}).Fatalf("Failed to destroy secret version: %v", err)
 			}
-			fmt.Println("Destroyed secret version: ", resp.Name)
-			if debug {
-				fmt.Println("Operation responce", destroyResp)
-			}
+			logrus.WithFields(logrus.Fields{
+				"timestamp":     time.Now(),
+				"unixtimestamp": time.Now().UnixNano(),
+				"project":       project,
+			}).Info("Destroing the secret version: ", resp.Name)
+			logrus.Fatal("Operation responce", destroyResp)
 		}
 	}
 }
@@ -162,28 +205,81 @@ func customHelp() {
 }
 
 func main() {
+	// Check the cmd line args
 	flag.Parse()
 	if project == "" {
 		customHelp()
 		os.Exit(1)
 	}
+	// Debug
+	if debug {
+		logrus.SetLevel(logrus.DebugLevel)
+		coralogix.SetDebug(true)
+	}
+
+	// The main context
 	ctx := context.Background()
 	c, err := secretmanager.NewClient(ctx)
 	if err != nil {
-		log.Fatalf("Failed to create Secret Manager client: %v", err)
+		logrus.WithFields(logrus.Fields{
+			"timestamp":     time.Now(),
+			"unixtimestamp": time.Now().UnixNano(),
+			"project":       project,
+		}).Fatalf("Failed to create Secret Manager client: %v", err)
 	}
 	defer c.Close()
 
+	// Get Coralogix credentials from the secret name obtained from ENV
+	// Access the secret from Secret Manager.
+	accessRequest := &secretmanagerpb.AccessSecretVersionRequest{
+		Name: coralogix_key_gsm_name + "/versions/latest",
+	}
+
+	coralogix_private_key, err := c.AccessSecretVersion(ctx, accessRequest)
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"timestamp":     time.Now(),
+			"unixtimestamp": time.Now().UnixNano(),
+			"project":       project,
+		}).Fatalf("Failed to access secret version: %v", err)
+	}
+
+	// Initialise logging to Coralogix
+	// Coralogix docs:
+	// https://coralogix.com/docs/go/
+	// https://pkg.go.dev/github.com/coralogix/go-coralogix-sdk?utm_source=godoc#section-readme
+	CoralogixHook := coralogix.NewCoralogixHook(
+		string(coralogix_private_key.Payload.Data),
+		coralogix_app_name,
+		coralogix_subsystem_name,
+	)
+	logrus.AddHook(CoralogixHook)
+	defer CoralogixHook.Close()
+
+	logrus.WithFields(logrus.Fields{
+		"timestamp":     time.Now(),
+		"unixtimestamp": time.Now().UnixNano(),
+		"project":       project,
+	}).Info("Starting the secrets cleaner for ", project, " project")
+
+	// Get all project secrets
 	secrets, err := listSecrets(ctx, c, "projects/"+project)
 	if err != nil {
-		log.Fatalf("Failed to list secrets: %v", err)
+		logrus.WithFields(logrus.Fields{
+			"timestamp":     time.Now(),
+			"unixtimestamp": time.Now().UnixNano(),
+			"project":       project,
+		}).Fatalf("Failed to list secrets: %v", err)
 	}
 
 	for _, secret := range secrets {
-		if debug {
-			fmt.Println("Analyzing secret: ", secret)
-		}
 		disableExceptThelatestVersions(ctx, c, secret.Name)
 		destroyDisabledVersions(ctx, c, secret.Name)
 	}
+
+	logrus.WithFields(logrus.Fields{
+		"timestamp":     time.Now(),
+		"unixtimestamp": time.Now().UnixNano(),
+		"project":       project,
+	}).Info("Stopping the secrets cleaner")
 }
