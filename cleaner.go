@@ -24,7 +24,7 @@ var (
 	coralogix_key_gsm_name   string = os.Getenv("CORALOGIX_KEY_GSM_NAME")
 	coralogix_subsystem_name        = "secrets-cleaner"
 	// Disabled versions to keep
-	keepVersions = 2
+	keepVersions int
 )
 
 func init() {
@@ -39,9 +39,7 @@ type SecretName struct {
 }
 
 type SecretVersion struct {
-	Name              string
-	CreateTimeSeconds int64
-	CreateTimeNanos   int32
+	Name string
 }
 
 // Get all secrets for a given project
@@ -91,7 +89,7 @@ func disableExceptThelatestVersions(ctx context.Context, c *secretmanager.Client
 		}
 		// versions slice contains the list of secret versions sorted in reverse by create_time (newest first).
 		// https://pkg.go.dev/google.golang.org/genproto/googleapis/cloud/secretmanager/v1beta1#ListSecretVersionsResponse
-		versions = append(versions, SecretVersion{Name: resp.Name, CreateTimeSeconds: resp.CreateTime.Seconds, CreateTimeNanos: resp.CreateTime.Nanos})
+		versions = append(versions, SecretVersion{Name: resp.Name})
 	}
 	// Show the latest enabled secret version in the debug output
 	logrus.WithFields(logrus.Fields{
@@ -158,7 +156,7 @@ func destroyDisabledVersions(ctx context.Context, c *secretmanager.Client, secre
 				"project":       project,
 			}).Fatalf("Failed to get secret versions: %v", err)
 		}
-		versionsDisabled = append(versionsDisabled, SecretVersion{Name: resp.Name, CreateTimeSeconds: resp.CreateTime.Seconds, CreateTimeNanos: resp.CreateTime.Nanos})
+		versionsDisabled = append(versionsDisabled, SecretVersion{Name: resp.Name})
 	}
 	// If we have more disabled versions than keepVersions
 	if len(versionsDisabled) > keepVersions {
